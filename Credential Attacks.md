@@ -133,6 +133,12 @@ As defined by Merriam Webster, a Completely Automated Public Turing test to tell
 
 The idea behind our attack in this section is relatively straightforward. We're going to enumerate at least one CAPTCHA value that we note to be repeated due to poor implementation. Then, we'll send along a login request with an authentic CAPTCHA value. Eventually, after enough requests and because the CAPTCHA value is re-used, our attack will succeed.
 
+## CAPTCHA in Source
+
+One of the weakest forms of CAPTCHA implementation is when the page includes all the information needed to answer the CAPTCHA. Right Click > Inspect Element and note whether or not this CAPTCHA information is provided in the source code.
+
+
+
 
 
 
